@@ -1,3 +1,5 @@
+import pdb
+pdb.set_trace()
 import os
 import numpy as np
 import torch
@@ -25,7 +27,7 @@ class InstanceFeaturesModule(LightningDataModule):
             only_seq = None
             val_dataset_path = self.cfg.DATA_CONFIG.VAL_PRED_PATH + '/sequences/'
 
-        pos_scans = self.cfg.TRAIN.POS_SCANS
+        pos_scans = self.cfg.TRAIN.POS_SCANS            # 2
 
         train_dataset = InstanceFeatures(
             self.cfg.DATA_CONFIG.DATASET_PATH + '/sequences/',
@@ -33,13 +35,13 @@ class InstanceFeaturesModule(LightningDataModule):
             pos_scans = pos_scans,
             seq = only_seq,
             augmentations = self.cfg.DATA_CONFIG.DATALOADER.AUGMENTATION,
-            r_pos_scans = self.cfg.TRAIN.RANDOM_POS_SCANS
+            r_pos_scans = self.cfg.TRAIN.RANDOM_POS_SCANS  
         )
 
         val_dataset = InstanceFeatures(
             val_dataset_path,
             split = 'valid',
-            pos_scans = 0,#only get the scan
+            pos_scans = 2,#only get the scan
             seq = only_seq
         )
 
@@ -149,13 +151,13 @@ class InstanceFeatures(Dataset):
         pt_ins_preds = []#for validation predictions
 
         # select random scan based on index
-        fname = self.im_idx[index]
-        scan = int(fname[-10:-4])
-        seq = fname[-19:-17]
+        fname = self.im_idx[index]          # '/_data/zixuan/data_0620/single_frame/validation_predictions/sequences/08/scans/0000000.npy'
+        scan = int(fname[-11:-4])           # 0
+        seq = fname[-20:-18]                # 08
         scans = [scan]
         pos_idx = [index]
         #select all scans in the sequence
-        if self.random_pos_scans:
+        if self.random_pos_scans:           # True
             #random number [1,pos_scans]
             n_scans = np.random.randint(0,self.pos_scans+1)+1
             #if using previous and future scans
@@ -170,8 +172,8 @@ class InstanceFeatures(Dataset):
                     pos_idx.append(index-i)
             scans.append(scan+i)
             pos_idx.append(index+i)
-        scans.sort()
-        pos_idx.sort()
+        scans.sort()            # [0, 1, 2]
+        pos_idx.sort()          # [0, 1, 2]
 
         prev_scan = 0
         if scans[0] > 0:
@@ -181,7 +183,7 @@ class InstanceFeatures(Dataset):
 
         for i in range(len(scans)):
             if i == 0:
-                prev_scan_path = absoluteDirPath(self.data_path+seq+'/scans/'+str(prev_scan).zfill(6)+'.npy')
+                prev_scan_path = absoluteDirPath(self.data_path+seq+'/scans/'+str(prev_scan).zfill(7)+'.npy')
                 if os.path.exists(prev_scan_path):
                     prev_data = np.load(prev_scan_path,allow_pickle=True)
                     prev_pose = self.poses[prev_scan]
@@ -193,7 +195,7 @@ class InstanceFeatures(Dataset):
                     prev_ids = []
                     prev_coors = []
                     prev_coors_T = []
-            scan_path = absoluteDirPath(self.data_path+seq+'/scans/'+str(scans[i]).zfill(6)+'.npy')
+            scan_path = absoluteDirPath(self.data_path+seq+'/scans/'+str(scans[i]).zfill(7)+'.npy')         # '/_data/zixuan/data_0620/single_frame/validation_predictions/sequences/08/scans/000000.npy'
             if os.path.exists(scan_path):
                 #Check max number of points to avoid running out of memory
                 if sum(n_pts) > 100000: #max n_pts=5e5, bs=4 --> max n_pts=125k

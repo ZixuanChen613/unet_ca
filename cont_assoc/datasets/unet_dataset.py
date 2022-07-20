@@ -35,21 +35,26 @@ class SemanticKittiModule(LightningDataModule):
         ########## Point dataset splits
         train_pt_dataset = SemanticKitti(
             self.cfg.DATA_CONFIG.DATASET_PATH + '/sequences/',
-            split = train_split
+            self.cfg.DATA_CONFIG.UNET_TRAIN_PATH + '/sequences/',
+            pos_scans = 2,
+            split = train_split,
+            r_pos_scans = self.cfg.TRAIN.RANDOM_POS_SCANS
         )
 
         val_pt_dataset = SemanticKitti(
             self.cfg.DATA_CONFIG.DATASET_PATH + '/sequences/',
+            self.cfg.DATA_CONFIG.UNET_VAL_PATH + '/sequences/',
+            pos_scans = 0,
             split = val_split
         )
 
         test_pt_dataset = SemanticKitti(
             self.cfg.DATA_CONFIG.DATASET_PATH + '/sequences/',
+            self.cfg.DATA_CONFIG.UNET_VAL_PATH + '/sequences/',  ## need to modify
+            pos_scans = 0,
             split = test_split
         )
-
-        collate_function = collateInstances()
-
+        
         ########## Voxel spherical dataset splits
         self.train_set = CylindricalSemanticKitti(
             train_pt_dataset,
@@ -100,22 +105,28 @@ class SemanticKittiModule(LightningDataModule):
         self.valid_iter = iter(self.valid_loader)
         return self.valid_loader
 
-    def test_dataloader(self):
-        self.test_loader = DataLoader(
-            dataset = self.test_set,
-            batch_size = self.cfg.EVAL.BATCH_SIZE,
-            collate_fn = collate_fn_BEV,
-            shuffle = False,
-            num_workers = self.cfg.DATA_CONFIG.DATALOADER.NUM_WORKER,
-            pin_memory = True,
-            drop_last = False,
-            timeout = 0
-        )
-        self.test_iter = iter(self.test_loader)
-        return self.test_loader
+    # def test_dataloader(self):
+    #     self.test_loader = DataLoader(
+    #         dataset = self.test_set,
+    #         batch_size = self.cfg.EVAL.BATCH_SIZE,
+    #         collate_fn = collate_fn_BEV,
+    #         shuffle = False,
+    #         num_workers = self.cfg.DATA_CONFIG.DATALOADER.NUM_WORKER,
+    #         pin_memory = True,
+    #         drop_last = False,
+    #         timeout = 0
+    #     )
+    #     self.test_iter = iter(self.test_loader)
+    #     return self.test_loader
 
 class SemanticKitti(Dataset):
-    def __init__(self, data_path, split='train', seq=None):
+    def __init__(self, data_path, unet_path, pos_scans, split='train', seq=None, r_pos_scans=False):  # modify unet_path
+
+        self.pos_scans = pos_scans
+        self.data_path = data_path
+        self.unet_path = unet_path
+        self.random_pos_scans = r_pos_scans
+
         with open("datasets/semantic-kitti.yaml", 'r') as stream:
             semkittiyaml = yaml.safe_load(stream)
         SemKITTI_label_name = dict()
@@ -126,13 +137,22 @@ class SemanticKitti(Dataset):
         split = semkittiyaml['split'][self.split]
 
         self.im_idx = []
+        self.unet_idx = []
         pose_files = []
         calib_files = []
+        unet_files = []
+        empty_files = []
+
         for i_folder in split:
             self.im_idx += absoluteFilePaths('/'.join([data_path,str(i_folder).zfill(2),'velodyne']))
             pose_files.append(absoluteDirPath(data_path+str(i_folder).zfill(2)+'/poses.txt'))
             calib_files.append(absoluteDirPath(data_path+str(i_folder).zfill(2)+'/calib.txt'))
 
+            # empty_files.append(absoluteDirPath(unet_path+str(i_folder).zfill(2)+'/empty.txt'))
+            self.unet_idx += absoluteFilePaths('/'.join([unet_path,str(i_folder).zfill(2),'scans']))
+
+           
+        self.unet_idx.sort()
         self.im_idx.sort()
         self.poses = load_poses(pose_files, calib_files)
 
@@ -149,23 +169,132 @@ class SemanticKitti(Dataset):
         return len(self.im_idx)
 
     def __getitem__(self, index):
-        raw_data = np.fromfile(self.im_idx[index], dtype=np.float32).reshape((-1, 4))
+
+        raw_data = []
+        ref = []
+        sem_labels = []
+        ins_labels = []
+        valid = []
+        new_feats = []
+
         if self.split == 'test':
+            raw_data = np.fromfile(self.im_idx[index], dtype=np.float32).reshape((-1, 4))
             annotated_data = np.expand_dims(np.zeros_like(raw_data[:,0],dtype=int),axis=1)
             sem_labels = annotated_data
             ins_labels = annotated_data
             valid = annotated_data
+            ############## modify
         else:
-            annotated_data = np.fromfile(self.im_idx[index].replace('velodyne','labels')[:-3]+'label', dtype=np.int32).reshape((-1,1))
-            sem_labels = annotated_data & 0xFFFF #delete high 16 digits binary
-            ins_labels = annotated_data
-            valid = np.isin(sem_labels, self.things_ids).reshape(-1) # use 0 to filter out valid indexes is enough
-            sem_labels = np.vectorize(self.learning_map.__getitem__)(sem_labels)
-        data_tuple = (raw_data[:,:3], sem_labels.astype(np.uint8))
-        data_tuple += (raw_data[:,3],)#ref
+            # raw_data = np.fromfile(self.im_idx[index], dtype=np.float32).reshape((-1, 4))
+            # annotated_data = np.fromfile(self.im_idx[index].replace('velodyne','labels')[:-3]+'label', dtype=np.int32).reshape((-1,1))
+            # sem_labels = annotated_data & 0xFFFF #delete high 16 digits binary
+            # ins_labels = annotated_data
+            # valid = np.isin(sem_labels, self.things_ids).reshape(-1) # use 0 to filter out valid indexes is enough
+            # sem_labels = np.vectorize(self.learning_map.__getitem__)(sem_labels)
+
+            #####
+            # select random scan based on index
+            fname = self.unet_idx[index]          # '/_data/zixuan/data_0620/single_frame/validation_predictions/sequences/08/scans/0000000.npy'
+            scan = int(fname[-10:-4])           # 0
+            seq = fname[-19:-17]                # 08
+            scans = [scan]
+            pos_idx = [index]
+            #select all scans in the sequence
+            if self.random_pos_scans:           # True
+                #random number [1,pos_scans]
+                n_scans = np.random.randint(0,self.pos_scans+1)+1
+                #if using previous and future scans
+                pair = bool(np.random.randint(0,2))
+            else:
+                n_scans = self.pos_scans + 1
+                pair = True
+            for i in range(1,n_scans):
+                if pair:
+                    if scan-i >= 0:
+                        scans.append(scan-i)
+                        pos_idx.append(index-i)
+                scans.append(scan+i)
+                pos_idx.append(index+i)
+            scans.sort()            # [0, 1, 2]
+            pos_idx.sort()          # [0, 1, 2]
+
+            prev_scan = 0
+            if scans[0] > 0:
+                prev_scan = scans[0] - 1
+
+            for i in range(len(scans)):
+                if i == 0:
+                    prev_scan_path = absoluteDirPath(self.unet_path+seq+'/scans/'+str(prev_scan).zfill(6)+'.npy')
+                    if os.path.exists(prev_scan_path):
+                        prev_data = np.load(prev_scan_path,allow_pickle=True)
+                        prev_pose = self.poses[prev_scan]
+                        prev_ids = prev_data[2]
+                        prev_coors = prev_data[5]
+                        prev_coors_T = apply_pose(prev_coors,prev_pose)
+                    else:
+                        prev_pose = []
+                        prev_ids = []
+                        prev_coors = []
+                        prev_coors_T = []
+                scan_path = absoluteDirPath(self.unet_path+seq+'/scans/'+str(scans[i]).zfill(6)+'.npy')         # '/_data/zixuan/data_0620/single_frame/validation_predictions/sequences/08/scans/000000.npy'
+                if os.path.exists(scan_path):
+                    #Check max number of points to avoid running out of memory
+                    if sum(n_pts) > 100000: #max n_pts=5e5, bs=4 --> max n_pts=125k  ######## modify
+                        break
+                    pose = self.poses[pos_idx[i]]
+                    if len(seq_first_pose) == 0:
+                        seq_first_pose = pose
+                    
+                    _raw_data = np.fromfile(self.im_idx[scans[i]], dtype=np.float32).reshape((-1, 4))
+                    annotated_data = np.fromfile(self.im_idx[scans[i]].replace('velodyne','labels')[:-3]+'label', dtype=np.int32).reshape((-1,1))
+                    _sem_labels = annotated_data & 0xFFFF #delete high 16 digits binary
+                    _ins_labels = annotated_data
+                    _valid = np.isin(_sem_labels, self.things_ids).reshape(-1) # use 0 to filter out valid indexes is enough
+                    _sem_labels = np.vectorize(self.learning_map.__getitem__)(_sem_labels)
+
+                    data = np.load(scan_path,allow_pickle=True)
+                    
+                    # _ids = data[2]
+                    # _pos_lab = _ids
+                    # _sem_lab = data[3]
+                    # _n_pt = data[4]
+                    # _coors = data[5]
+                    # _feats = data[6]
+
+                    _new_feats = data[7]
+
+
+                    # if self.aug is not None and self.aug.DO_AUG == True:
+                    #     _coors, _feats, _n_pt = self.apply_augmentations(_coors, _feats, _n_pt)
+
+                    _coors_T = apply_pose(_raw_data[:,:3], pose)
+
+                    #shift coors to local frame of first scan in the sequence
+                    if self.split == 'train':
+                        _coors = apply_pose(_coors_T, np.linalg.inv(seq_first_pose))
+
+
+                    raw_data = np.append(raw_data, _coors)
+                    ref = np.append(ref, _raw_data[:,3])
+                    sem_labels = np.append(sem_labels, _sem_labels)
+                    ins_labels = np.append(ins_labels ,_ins_labels)
+                    valid = np.append(valid, _valid)
+                    new_feats = np.append(new_feats, _new_feats)
+
+
+                    prev_coors = _coors
+                    prev_coors_T = _coors_T
+                    prev_ids = _ids
+
+
+
+        data_tuple = (raw_data, sem_labels.astype(np.uint8))
+        data_tuple += (ref,)#ref
         data_tuple += (ins_labels, valid)#ins ids
         data_tuple += (self.im_idx[index],)#filename
         data_tuple += (self.poses[index],)#pose
+        data_tuple += (new_feats,) #feats   [m*Ni, 128]
+
         return data_tuple
 
 class CylindricalSemanticKitti(Dataset):
@@ -188,11 +317,11 @@ class CylindricalSemanticKitti(Dataset):
 
   def __getitem__(self, index):
         data = self.point_cloud_dataset[index]
-        if len(data) == 6:
-            xyz,labels,sig,ins_labels,valid,pcd_fname = data
+        if len(data) == 7:
+            xyz,labels,sig,ins_labels,valid,pcd_fname,feats = data
             if len(sig.shape) == 2: sig = np.squeeze(sig)
-        elif len(data) == 7:
-            xyz,labels,sig,ins_labels,valid,pcd_fname,pose = data
+        elif len(data) == 8:
+            xyz,labels,sig,ins_labels,valid,pcd_fname,pose,feats = data
             if len(sig.shape) == 2: sig = np.squeeze(sig)
         else: raise Exception('Return invalid data tuple')
 
@@ -249,11 +378,11 @@ class CylindricalSemanticKitti(Dataset):
         offsets = np.zeros([xyz.shape[0], 3], dtype=np.float32)
         offsets = nb_aggregate_pointwise_center_offset(offsets, xyz, ins_labels, self.center_type)
 
-        if len(data) == 6:
-            data_tuple += (ins_labels, offsets, valid, xyz, pcd_fname) # plus (point-wise instance label, point-wise center offset)
-
         if len(data) == 7:
-            data_tuple += (ins_labels, offsets, valid, xyz, pcd_fname, pose) # plus (point-wise instance label, point-wise center offset)
+            data_tuple += (ins_labels, offsets, valid, xyz, pcd_fname, feats) # plus (point-wise instance label, point-wise center offset)
+
+        if len(data) == 8:
+            data_tuple += (ins_labels, offsets, valid, xyz, pcd_fname, pose, feats) # plus (point-wise instance label, point-wise center offset)
 
         return data_tuple
 
@@ -319,7 +448,10 @@ def collate_fn_BEV(data): # stack along batch dimension
     pt_cart_xyz = [d[9] for d in data]                           # point-wise cart coor
     filename = [d[10] for d in data]                             # scan filename
     pose = [d[11] for d in data]                                 # pose of the scan
+    feats = [d[12] for d in data]                               # instance feats (valid)
 
+
+    
     return {
         'vox_coor': torch.from_numpy(data2stack),
         'vox_labels': label2stack,
@@ -332,7 +464,8 @@ def collate_fn_BEV(data): # stack along batch dimension
         'pt_valid': pt_valid,
         'pt_cart_xyz': pt_cart_xyz,
         'pcd_fname': filename,
-        'pose': pose
+        'pose': pose,
+        'feats': feats                              ##########
     }
 
 # Transformations between Cartesian and Polar coordinates
@@ -392,42 +525,27 @@ def load_poses(pose_files, calib_files):
         seq_poses = ([pose.astype(np.float32) for pose in seq_poses_f64])
         poses += seq_poses
     return poses
+    # poses = []
+    # #go through every file and get all poses
+    # #add them to match im_idx
+    # for i in range(len(pose_files)):
+    #     empty = get_empty(empty_files[i])
+    #     calib = parse_calibration(calib_files[i])
+    #     seq_poses_f64 = parse_poses(pose_files[i], calib)
+    #     seq_poses = ([seq_poses_f64[i].astype(np.float32) for i in range(len(seq_poses_f64)) if i not in empty])
+    #     poses += seq_poses
+    # return poses
 
-class collateInstances:
 
-    def __init__(self):
-        pass
+def get_empty(filename):
+    empty_list = []
+    empty_file = open(filename)
+    for line in empty_file:
+        empty_list.append(int(line.strip()))
+    empty_file.close()
+    return empty_list
 
-    def __call__(self, data):
-        ids = [d[0] for d in data]
-        sem_labels = [d[1] for d in data]
-        pos_labels = [d[2] for d in data]
-        n_pts = [d[3] for d in data]
-        pt_coors = [d[4] for d in data]
-        pt_coors_T = [d[5] for d in data]
-        pt_features = [d[6] for d in data]
-        pose = [d[7] for d in data]
-
-        out_dict =  {                       #for each instance:
-            'id': ids,                      #instance id
-            'sem_label': sem_labels,        #semantic label
-            'pos_label': pos_labels,        #positive label: to consider as positive example
-            'n_pts' : n_pts,                #number of points depicting the instance
-            'pt_coors' : pt_coors,          #xyz coordinates for each point [n_pts,3]
-            'pt_coors_T' : pt_coors_T,      #global points coordinates [n_pts,3]
-            'pt_features' : pt_features,    #features for every point [n_pts,128]
-            'pose' : pose,                  #scan center global position
-            }
-
-        if len(data[0]) == 13: #validation predictions
-            pt_sem_pred = [d[8] for d in data]
-            pt_ins_pred = [d[9] for d in data]
-            pcd_fname = [d[10] for d in data]
-            pt_labs = [d[11] for d in data]
-            pt_ins_labels = [d[12] for d in data]
-            out_dict['pt_sem_pred'] = pt_sem_pred        #sem preds for all points in the scan
-            out_dict['pt_ins_pred'] = pt_ins_pred        #ins preds for all points in the scan
-            out_dict['pcd_fname'] = pcd_fname            #filename
-            out_dict['pt_labs'] = pt_labs                #per point sem label
-            out_dict['pt_ins_labels'] = pt_ins_labels    #per point instance label
-        return out_dict
+def apply_pose(points, pose):
+    hpoints = np.hstack((points.numpy()[:, :3], np.ones_like(points.numpy()[:, :1])))
+    shifted_points = torch.tensor(np.sum(np.expand_dims(hpoints, 2) * pose.T, axis=1)[:,:3])
+    return shifted_points

@@ -1,25 +1,32 @@
 import pdb
 pdb.set_trace()
+import os
+os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 import numpy as np
 import spconv
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from .loss import instance_losses
+from .loss import lovasz_losses
 from pytorch_lightning.core.lightning import LightningModule
-import cont_assoc.models.blocks as blocks
+import cont_assoc.models.unet_blocks as blocks
 import cont_assoc.utils.predict as pred
 import cont_assoc.utils.testing as testing
 import cont_assoc.utils.save_features as sf
 from cont_assoc.utils.evaluate_panoptic import PanopticKittiEvaluator
 from cont_assoc.utils.evaluate_4dpanoptic import PanopticKitti4DEvaluator
+from utils.common_utils import SemKITTI2train
+from cont_assoc.models.loss_contrastive import SupConLoss
 
 
-class PanopticCylinder(LightningModule):
+class UNet(LightningModule):
     def __init__(self, cfg):
         super().__init__()
 
         self.cfg = cfg
+        self.ignore_label = cfg.DATA_CONFIG.DATALOADER.CONVERT_IGNORE_LABEL         # 0
 
         self.voxel_feature_extractor = blocks.VoxelFeatureExtractor(cfg)
         self.encoder = CylinderEncoder(cfg)
@@ -28,6 +35,11 @@ class PanopticCylinder(LightningModule):
         self.instance_head = CylinderInstanceHead(cfg)
 
         self.evaluator = PanopticKittiEvaluator(cfg=cfg)
+        # self.sem_loss_lovasz = lovasz_losses.lovasz_softmax
+        # self.sem_loss = torch.nn.CrossEntropyLoss(ignore_index=self.ignore_label)  #modify
+        self.ins_loss = SupConLoss(temperature=0.1)          # modify
+        
+
 
     def get_pq(self):
         return self.evaluator.get_mean_pq()
@@ -47,14 +59,59 @@ class PanopticCylinder(LightningModule):
 
         return sem_pred, ins_pred
 
-    def forward(self, x):           # x['pt_fea'][0].shape (124668, 9); x['pt_fea'][1].shape (124605, 9)
-        coordinates, voxel_features = self.voxel_feature_extractor(x)                       # torch.Size([83093, 4]) torch.Size([83093, 16])
-        encoding, skips = self.encoder(voxel_features, coordinates, len(x['grid']))         # torch.Size([7514, 512])
-        semantic_feat, instance_feat = self.decoder(encoding, skips)            # torch.Size([83093, 128]); torch.Size([83093, 128])
+    def forward(self, x):
+
+        coordinates, voxel_features = self.voxel_feature_extractor(x)
+        encoding, skips = self.encoder(voxel_features, coordinates, len(x['grid'])) ## modify
+        semantic_feat, instance_feat = self.decoder(encoding, skips)
         semantic_logits = self.semantic_head(semantic_feat)
-        predicted_offsets, pt_ins_feat = self.instance_head(instance_feat, x)   # torch.Size([124668, 3]); torch.Size([124605, 32])
+        predicted_offsets, pt_ins_feat = self.instance_head(instance_feat, x)
 
         return semantic_logits, predicted_offsets, pt_ins_feat, instance_feat
+
+    #############################################################
+
+    def configure_optimizers(self):  # need to modify?
+        optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad,
+                                self.parameters()), lr=self.cfg.TRAIN.LR)
+        return optimizer
+
+
+    def getLoss(self, x, features):
+        loss = {}
+        sem_labels = [torch.from_numpy(i).type(torch.LongTensor).cuda()
+                      for i in x['sem_label']]
+        sem_labels = (torch.cat([i for i in sem_labels])).unsqueeze(1) #single tensor
+        pos_labels = [torch.from_numpy(i).type(torch.LongTensor).cuda()
+                      for i in x['pos_label']]
+        pos_labels = (torch.cat([i for i in pos_labels])).unsqueeze(1) #single tensor
+        norm_features = F.normalize(features)
+        ins_loss = self.ins_loss(norm_features, pos_labels, sem_labels)
+        loss['unet'] = ins_loss
+        return loss
+
+    ########################################
+
+    def training_step(self, batch, batch_idx):
+
+        x = batch
+        semantic_logits, predicted_offsets, pt_ins_feat, instance_feat = self(x)
+
+        loss = self.getLoss(x, semantic_logits, predicted_offsets)
+        self.log('train/unet_loss', loss['unet_loss'])
+        torch.cuda.empty_cache()
+
+        return loss['unet_loss']
+
+    
+    def validation_step(self, batch, batch_idx):
+        x = batch
+        sem_logits, pred_offsets, pt_ins_feat, raw_features = self(x)
+        sem_pred, ins_pred = self.merge_predictions(x, sem_logits, pred_offsets, pt_ins_feat)
+        self.evaluator.update(sem_pred, ins_pred, x)
+
+
+
 
     def test_step(self, batch, batch_idx):
         x = batch
@@ -71,7 +128,7 @@ class PanopticCylinder(LightningModule):
             self.evaluator.update(sem_pred, ins_pred, x)
 
         if 'SAVE_FEATURES' in self.cfg:
-            pt_raw_feat = pred.feat_voxel2point(raw_features,x)         # torch.Size([124668, 128])
+            pt_raw_feat = pred.feat_voxel2point(raw_features,x)
             sf.save_features(x, pt_raw_feat, sem_pred, ins_pred, save_preds=False)
 
         if 'SAVE_VAL_PRED' in self.cfg:
@@ -100,16 +157,16 @@ class CylinderEncoder(nn.Module):
         self.downBlock3 = blocks.DownResBlock(8 * init_size, 16 * init_size, 0.2, pooling=True, height_pooling=False, indice_key="down3")
 
     def forward(self, voxel_features, coors, batch_size):
-        coors = coors.int()         # torch.Size([83093, 4])
-        x = spconv.SparseConvTensor(voxel_features, coors, self.sparse_shape,           # torch.Size([83093, 16])
+        coors = coors.int()
+        x = spconv.SparseConvTensor(voxel_features, coors, self.sparse_shape,
                                       batch_size)
-        x = self.contextBlock(x)                                        # torch.Size([83093, 32])
-        down0_feat, down0_skip = self.downBlock0(x)                     # torch.Size([73532, 64])
-        down1_feat, down1_skip = self.downBlock1(down0_feat)            # torch.Size([31133, 128])
-        down2_feat, down2_skip = self.downBlock2(down1_feat)            # torch.Size([18616, 256])
-        down3_feat, down3_skip = self.downBlock3(down2_feat)            # torch.Size([7514, 512])
+        x = self.contextBlock(x)
+        down0_feat, down0_skip = self.downBlock0(x)
+        down1_feat, down1_skip = self.downBlock1(down0_feat)
+        down2_feat, down2_skip = self.downBlock2(down1_feat)
+        down3_feat, down3_skip = self.downBlock3(down2_feat)
 
-        skips = [down0_skip, down1_skip, down2_skip, down3_skip]        #  torch.Size([83093, 64]) torch.Size([73532, 128]) torch.Size([31133, 256]) torch.Size([18616, 512])
+        skips = [down0_skip, down1_skip, down2_skip, down3_skip]
 
         return down3_feat, skips
 

@@ -1,3 +1,5 @@
+# import pdb
+# pdb.set_trace()
 import MinkowskiEngine as ME
 import time
 import numpy as np
@@ -7,6 +9,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch_scatter
 from cont_assoc.utils.voxel_features import grp_range_torch
+torch.manual_seed(19)
 
 def conv3x3(in_planes, out_planes, stride=1, indice_key=None):
     return spconv.SubMConv3d(in_planes, out_planes, kernel_size=3, stride=stride,
@@ -44,6 +47,7 @@ class VoxelFeatureExtractor(nn.Module):
 
         in_dim = cfg.DATA_CONFIG.DATALOADER.DATA_DIM #9
         out_dim = cfg.MODEL.VOXEL_FEATURES.OUT_DIM #64
+        sem_feat_dim = 128
         point_feature_dim = cfg.MODEL.VOXEL_FEATURES.FEATURE_DIM #16
         self.max_pt = cfg.MODEL.VOXEL_FEATURES.MAX_PT_PER_ENCODE #256
 
@@ -70,13 +74,22 @@ class VoxelFeatureExtractor(nn.Module):
             nn.ReLU()
         )
 
+        self.SemFeatureCompression = nn.Sequential(
+            nn.Linear(sem_feat_dim, point_feature_dim*2),
+            nn.ReLU(),
+            nn.Linear(point_feature_dim*2, point_feature_dim),
+            nn.ReLU(),
+        )
+
     def forward(self, x):
-        point_features = x['pt_fea']
+        point_features = x['pt_fea']            # [N, 9]
         voxel_index = x['grid']
+        semantic_feats = x['feats']             # point embedings from backbone
 
         #create tensors
         pt_fea = [torch.from_numpy(i).type(torch.FloatTensor).cuda() for i in point_features]
         vox_ind = [torch.from_numpy(i).cuda() for i in voxel_index]
+        sem_feats = [torch.from_numpy(i).cuda() for i in semantic_feats]
 
         #concatenate everything
         cat_pt_ind = []
@@ -85,12 +98,14 @@ class VoxelFeatureExtractor(nn.Module):
 
         cat_pt_fea = torch.cat(pt_fea, dim=0)
         cat_pt_ind = torch.cat(cat_pt_ind, dim=0)
+        cat_sem_fea = torch.cat(sem_feats, dim=0)           # 8782
         pt_num = cat_pt_ind.shape[0]
 
         # shuffle the data
-        shuffled_ind = torch.randperm(pt_num)
+        shuffled_ind = torch.randperm(pt_num)           #########???? add a seed?
         cat_pt_fea = cat_pt_fea[shuffled_ind, :]
         cat_pt_ind = cat_pt_ind[shuffled_ind, :]
+        cat_sem_fea = cat_sem_fea[shuffled_ind, :]
 
         # unique xy voxel index
         unq, unq_inv, unq_cnt = torch.unique(cat_pt_ind, return_inverse=True, return_counts=True, dim=0)
@@ -102,18 +117,21 @@ class VoxelFeatureExtractor(nn.Module):
 
         cat_pt_fea = cat_pt_fea[remain_ind,:]
         cat_pt_ind = cat_pt_ind[remain_ind,:]
+        cat_sem_fea = cat_sem_fea[remain_ind,:]
         unq_inv = unq_inv[remain_ind]
         unq_cnt = torch.clamp(unq_cnt,max=self.max_pt)
 
         # process feature
-        processed_cat_pt_fea = self.PointNet(cat_pt_fea)
+        # processed_cat_pt_fea = self.PointNet(cat_pt_fea)    # output:[n,64] ; input [n,9]
         #TODO: maybe use pointnet to extract features inside each grid and each grid share the same parameters instead of apply pointnet to global point clouds?
         # This kind of global pointnet is more memory efficient cause otherwise we will have to alloc [480 x 360 x 32 x 64 x C] tensor in order to apply pointnet to each grid
 
         # choose the max feature for each grid
-        pooled_data = torch_scatter.scatter_max(processed_cat_pt_fea, unq_inv, dim=0)[0] 
+        # pooled_data = torch_scatter.scatter_max(processed_cat_pt_fea, unq_inv, dim=0)[0]            # torch.Size([83093, 64])
+        pooled_sem_fea = torch_scatter.scatter_max(cat_sem_fea, unq_inv, dim=0)[0]          # 3280 # torch.Size([83093, 128])
 
-        voxel_features = self.FeatureCompression(pooled_data)
+        # voxel_features = self.FeatureCompression(pooled_data)           # torch.Size([83093, 16])
+        voxel_features = self.SemFeatureCompression(pooled_sem_fea)             # compress the dimensional from 128 to 16    
 
         # stuff pooled data into 4D tensor
         # out_data_dim = [len(pt_fea),self.grid_size[0],self.grid_size[1],self.pt_fea_dim]

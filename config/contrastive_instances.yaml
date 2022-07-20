@@ -3,8 +3,8 @@ EXPERIMENT:
 
 DATA_CONFIG:
     DATASET_NAME: KittiInstanceFeatures
-    DATASET_PATH: ../cont_assoc/data/2instance_features
-    VAL_PRED_PATH: ../cont_assoc/data/2validation_predictions
+    DATASET_PATH: /_data/zixuan/data_0620/single_frame/instance_features
+    VAL_PRED_PATH: /_data/zixuan/data_0620/single_frame/validation_predictions
     CONFIG_FILE: ../cont_assoc/datasets/semantic-kitti.yaml
     DATALOADER:
         AUGMENTATION:
@@ -15,8 +15,8 @@ DATA_CONFIG:
             CUBOIDS: True
             CONTOUR: True
         SHUFFLE: True
-        DATA_DIM: 128
-        NUM_WORKER: 6
+        DATA_DIM: 256 #128
+        NUM_WORKER: 0 #6 
 
 TRAIN:
     MAX_EPOCH: 100
