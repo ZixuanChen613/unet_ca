@@ -1,7 +1,7 @@
 # import pdb
 # pdb.set_trace()
-# import os
-# os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
+import os
+os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 import numpy as np
 import spconv
 import torch
@@ -81,9 +81,14 @@ class UNet(LightningModule):
         _pos_labels = []
         _sem_labels = []
         ids, n_ids = torch.unique(pos_labels,return_counts=True)
-         
+        sorted_n_ids, indices = torch.sort(n_ids, descending=True)
+        ids = ids[indices]
+        ins_num = 0
         for i in range(len(ids)): #iterate over all instances
-            if n_ids[i] > 30*pos_scans and n_ids[i] < 1000: #filter too small instances
+            if ins_num > 8000:
+                break
+            if sorted_n_ids[i] > 50*pos_scans and sorted_n_ids[i] < 800: #filter too small instances 30
+                ins_num += sorted_n_ids[i]
                 pt_idx = torch.where(pos_labels==ids[i])[0]
                 feat = norm_features[pt_idx]
                 s_labels = sem_labels[pt_idx]
@@ -91,9 +96,10 @@ class UNet(LightningModule):
                 _pos_labels.append(p_labels)
                 _feats.append(feat)
                 _sem_labels.append(s_labels)
-            elif n_ids[i] >= 1000:
+            elif sorted_n_ids[i] >= 800:
+                ins_num += 800
                 pt_idx = torch.where(pos_labels==ids[i])[0]
-                pt_idx = pt_idx[torch.randperm(n_ids[i])][:1000]
+                pt_idx = pt_idx[torch.randperm(sorted_n_ids[i])][:800]
                 feat = norm_features[pt_idx]
                 s_labels = sem_labels[pt_idx]
                 p_labels = pos_labels[pt_idx]
