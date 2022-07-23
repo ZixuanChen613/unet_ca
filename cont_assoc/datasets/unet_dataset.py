@@ -105,19 +105,19 @@ class SemanticKittiModule(LightningDataModule):
         self.valid_iter = iter(self.valid_loader)
         return self.valid_loader
 
-    # def test_dataloader(self):
-    #     self.test_loader = DataLoader(
-    #         dataset = self.test_set,
-    #         batch_size = self.cfg.EVAL.BATCH_SIZE,
-    #         collate_fn = collate_fn_BEV,
-    #         shuffle = False,
-    #         num_workers = self.cfg.DATA_CONFIG.DATALOADER.NUM_WORKER,
-    #         pin_memory = True,
-    #         drop_last = False,
-    #         timeout = 0
-    #     )
-    #     self.test_iter = iter(self.test_loader)
-    #     return self.test_loader
+    def test_dataloader(self):
+        self.test_loader = DataLoader(
+            dataset = self.test_set,
+            batch_size = self.cfg.EVAL.BATCH_SIZE,
+            collate_fn = collate_fn_BEV,
+            shuffle = False,
+            num_workers = self.cfg.DATA_CONFIG.DATALOADER.NUM_WORKER,
+            pin_memory = True,
+            drop_last = False,
+            timeout = 0
+        )
+        self.test_iter = iter(self.test_loader)
+        return self.test_loader
 
 class SemanticKitti(Dataset):
     def __init__(self, data_path, unet_path, pos_scans, split='train', seq=None, r_pos_scans=False):  # modify unet_path
@@ -222,6 +222,8 @@ class SemanticKitti(Dataset):
             if scans[0] > 0:
                 prev_scan = scans[0] - 1
 
+            seq_first_pose = []
+
             for i in range(len(scans)):
                 if i == 0:
                     prev_scan_path = absoluteDirPath(self.unet_path+seq+'/scans/'+str(prev_scan).zfill(6)+'.npy')
@@ -230,22 +232,24 @@ class SemanticKitti(Dataset):
                         prev_pose = self.poses[prev_scan]
                         prev_ids = prev_data[2]
                         prev_coors = prev_data[5]
-                        prev_coors_T = apply_pose(prev_coors,prev_pose)
+                        # prev_coors_T = apply_pose(prev_coors,prev_pose)
                     else:
                         prev_pose = []
                         prev_ids = []
                         prev_coors = []
-                        prev_coors_T = []
+                        # prev_coors_T = []
                 scan_path = absoluteDirPath(self.unet_path+seq+'/scans/'+str(scans[i]).zfill(6)+'.npy')         # '/_data/zixuan/data_0620/single_frame/validation_predictions/sequences/08/scans/000000.npy'
                 if os.path.exists(scan_path):
                     #Check max number of points to avoid running out of memory
-                    if sum(n_pts) > 100000: #max n_pts=5e5, bs=4 --> max n_pts=125k  ######## modify
-                        break
+                    # if sum(n_pts) > 100000: #max n_pts=5e5, bs=4 --> max n_pts=125k  ######## modify
+                    #     break
                     pose = self.poses[pos_idx[i]]
                     if len(seq_first_pose) == 0:
                         seq_first_pose = pose
                     
                     _raw_data = np.fromfile(self.im_idx[scans[i]], dtype=np.float32).reshape((-1, 4))
+                    _ref = _raw_data[:,3]
+                    _coors = _raw_data[:,:3]
                     annotated_data = np.fromfile(self.im_idx[scans[i]].replace('velodyne','labels')[:-3]+'label', dtype=np.int32).reshape((-1,1))
                     _sem_labels = annotated_data & 0xFFFF #delete high 16 digits binary
                     _ins_labels = annotated_data
@@ -267,34 +271,35 @@ class SemanticKitti(Dataset):
                     # if self.aug is not None and self.aug.DO_AUG == True:
                     #     _coors, _feats, _n_pt = self.apply_augmentations(_coors, _feats, _n_pt)
 
-                    _coors_T = apply_pose(_raw_data[:,:3], pose)
+                    _coors_T = apply_pose(_coors, pose)
 
                     #shift coors to local frame of first scan in the sequence
                     if self.split == 'train':
-                        _coors = apply_pose(_coors_T, np.linalg.inv(seq_first_pose))
+                        _coors = apply_pose(_coors_T, np.linalg.inv(seq_first_pose)).numpy()
 
 
-                    raw_data = np.append(raw_data, _coors)
-                    ref = np.append(ref, _raw_data[:,3])
+                    raw_data.append(_coors)
+                    ref = np.append(ref, _ref)
                     sem_labels = np.append(sem_labels, _sem_labels)
-                    ins_labels = np.append(ins_labels ,_ins_labels)
+                    ins_labels = np.append(ins_labels ,_ins_labels.astype(np.int32))
                     valid = np.append(valid, _valid)
-                    new_feats = np.append(new_feats, _new_feats)
+                    new_feats.append(_new_feats)
 
 
-                    prev_coors = _coors
-                    prev_coors_T = _coors_T
-                    prev_ids = _ids
-
-
-
-        data_tuple = (raw_data, sem_labels.astype(np.uint8))
-        data_tuple += (ref,)#ref
-        data_tuple += (ins_labels, valid)#ins ids
+                    # prev_coors = _coors
+                    # prev_coors_T = _coors_T
+                    # prev_ids = _ids
+        pos_scans = len(scans)
+        raw_data = np.concatenate(raw_data, axis=0)
+        data_tuple = (raw_data, sem_labels.reshape((-1,1)).astype(np.uint8))
+        data_tuple += (ref.astype(np.float32),)#ref
+        data_tuple += (ins_labels.reshape((-1,1)).astype(np.int32), valid.astype(np.bool))#ins ids
         data_tuple += (self.im_idx[index],)#filename
         data_tuple += (self.poses[index],)#pose
+        new_feats = np.concatenate(new_feats, axis=0)
         data_tuple += (new_feats,) #feats   [m*Ni, 128]
-
+        data_tuple += (pos_scans,)
+        
         return data_tuple
 
 class CylindricalSemanticKitti(Dataset):
@@ -317,11 +322,11 @@ class CylindricalSemanticKitti(Dataset):
 
   def __getitem__(self, index):
         data = self.point_cloud_dataset[index]
-        if len(data) == 7:
-            xyz,labels,sig,ins_labels,valid,pcd_fname,feats = data
+        if len(data) == 8:
+            xyz,labels,sig,ins_labels,valid,pcd_fname,feats,pos_scans = data
             if len(sig.shape) == 2: sig = np.squeeze(sig)
-        elif len(data) == 8:
-            xyz,labels,sig,ins_labels,valid,pcd_fname,pose,feats = data
+        elif len(data) == 9:
+            xyz,labels,sig,ins_labels,valid,pcd_fname,pose,feats,pos_scans = data
             if len(sig.shape) == 2: sig = np.squeeze(sig)
         else: raise Exception('Return invalid data tuple')
 
@@ -378,11 +383,11 @@ class CylindricalSemanticKitti(Dataset):
         offsets = np.zeros([xyz.shape[0], 3], dtype=np.float32)
         offsets = nb_aggregate_pointwise_center_offset(offsets, xyz, ins_labels, self.center_type)
 
-        if len(data) == 7:
-            data_tuple += (ins_labels, offsets, valid, xyz, pcd_fname, feats) # plus (point-wise instance label, point-wise center offset)
-
         if len(data) == 8:
-            data_tuple += (ins_labels, offsets, valid, xyz, pcd_fname, pose, feats) # plus (point-wise instance label, point-wise center offset)
+            data_tuple += (ins_labels, offsets, valid, xyz, pcd_fname, feats, pos_scans) # plus (point-wise instance label, point-wise center offset)
+
+        if len(data) == 9:
+            data_tuple += (ins_labels, offsets, valid, xyz, pcd_fname, pose, feats, pos_scans) # plus (point-wise instance label, point-wise center offset)
 
         return data_tuple
 
@@ -449,6 +454,7 @@ def collate_fn_BEV(data): # stack along batch dimension
     filename = [d[10] for d in data]                             # scan filename
     pose = [d[11] for d in data]                                 # pose of the scan
     feats = [d[12] for d in data]                               # instance feats (valid)
+    pos_scans = [d[13] for d in data]
 
 
     
@@ -465,7 +471,8 @@ def collate_fn_BEV(data): # stack along batch dimension
         'pt_cart_xyz': pt_cart_xyz,
         'pcd_fname': filename,
         'pose': pose,
-        'feats': feats                              ##########
+        'feats': feats,                          ##########
+        'pos_scans': pos_scans
     }
 
 # Transformations between Cartesian and Polar coordinates
@@ -546,6 +553,6 @@ def get_empty(filename):
     return empty_list
 
 def apply_pose(points, pose):
-    hpoints = np.hstack((points.numpy()[:, :3], np.ones_like(points.numpy()[:, :1])))
+    hpoints = np.hstack((points[:, :3], np.ones_like(points[:, :1])))
     shifted_points = torch.tensor(np.sum(np.expand_dims(hpoints, 2) * pose.T, axis=1)[:,:3])
     return shifted_points

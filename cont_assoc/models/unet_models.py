@@ -1,7 +1,7 @@
-import pdb
-pdb.set_trace()
-import os
-os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
+# import pdb
+# pdb.set_trace()
+# import os
+# os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 import numpy as np
 import spconv
 import torch
@@ -38,7 +38,7 @@ class UNet(LightningModule):
         # self.sem_loss_lovasz = lovasz_losses.lovasz_softmax
         # self.sem_loss = torch.nn.CrossEntropyLoss(ignore_index=self.ignore_label)  #modify
         self.ins_loss = SupConLoss(temperature=0.1)          # modify
-        
+
 
 
     def get_pq(self):
@@ -76,19 +76,66 @@ class UNet(LightningModule):
                                 self.parameters()), lr=self.cfg.TRAIN.LR)
         return optimizer
 
+    def group_instances(self, norm_features, pos_labels, sem_labels, pos_scans):
+        _feats = []
+        _pos_labels = []
+        _sem_labels = []
+        ids, n_ids = torch.unique(pos_labels,return_counts=True)
+         
+        for i in range(len(ids)): #iterate over all instances
+            if n_ids[i] > 30*pos_scans and n_ids[i] < 1000: #filter too small instances
+                pt_idx = torch.where(pos_labels==ids[i])[0]
+                feat = norm_features[pt_idx]
+                s_labels = sem_labels[pt_idx]
+                p_labels = pos_labels[pt_idx]
+                _pos_labels.append(p_labels)
+                _feats.append(feat)
+                _sem_labels.append(s_labels)
+            elif n_ids[i] >= 1000:
+                pt_idx = torch.where(pos_labels==ids[i])[0]
+                pt_idx = pt_idx[torch.randperm(n_ids[i])][:1000]
+                feat = norm_features[pt_idx]
+                s_labels = sem_labels[pt_idx]
+                p_labels = pos_labels[pt_idx]
+                _pos_labels.append(p_labels)
+                _feats.append(feat)
+                _sem_labels.append(s_labels)
+        
+        features = torch.cat([i for i in _feats])
+        pos_labels = torch.cat([i for i in _pos_labels])
+        sem_labels = torch.cat([i for i in _sem_labels])
+
+        return features, pos_labels, sem_labels
 
     def getLoss(self, x, features):
         loss = {}
         sem_labels = [torch.from_numpy(i).type(torch.LongTensor).cuda()
-                      for i in x['sem_label']]
-        sem_labels = (torch.cat([i for i in sem_labels])).unsqueeze(1) #single tensor
+                      for i in x['pt_labs']]
+        sem_labels = (torch.cat([i for i in sem_labels])) #single tensor    torch.Size([622523, 1])
         pos_labels = [torch.from_numpy(i).type(torch.LongTensor).cuda()
-                      for i in x['pos_label']]
-        pos_labels = (torch.cat([i for i in pos_labels])).unsqueeze(1) #single tensor
-        norm_features = F.normalize(features)
-        ins_loss = self.ins_loss(norm_features, pos_labels, sem_labels)
-        loss['unet'] = ins_loss
+                      for i in x['pt_ins_labels']]
+        pos_labels = (torch.cat([i for i in pos_labels])) #single tensor    torch.Size([622523, 1])
+        # norm_features = F.normalize(features)
+        pt_raw_feat = pred.feat_voxel2point(features,x)
+        pt_raw_feat = (torch.cat([i for i in pt_raw_feat])).cuda()                # torch.Size([622523, 128])
+        norm_features = F.normalize(pt_raw_feat)
+        ## clear ins == 0
+        valid = x['pt_valid']
+        pos_scans = x['pos_scans'][0]
+        valid = (np.concatenate([i for i in valid]))
+        pos_labels = pos_labels[valid]
+        sem_labels = sem_labels[valid]
+        norm_features = norm_features[valid]
+        # idx = torch.nonzero(pos_labels)
+        feats, pos_l, sem_l = self.group_instances(norm_features, pos_labels, sem_labels, pos_scans)
+        ins_loss = self.ins_loss(feats, pos_l, sem_l)         # torch.Size([13242, 128])
+        loss['unet_loss'] = ins_loss
         return loss
+
+
+    ####################################
+
+    
 
     ########################################
 
@@ -97,7 +144,7 @@ class UNet(LightningModule):
         x = batch
         semantic_logits, predicted_offsets, pt_ins_feat, instance_feat = self(x)
 
-        loss = self.getLoss(x, semantic_logits, predicted_offsets)
+        loss = self.getLoss(x, instance_feat)
         self.log('train/unet_loss', loss['unet_loss'])
         torch.cuda.empty_cache()
 

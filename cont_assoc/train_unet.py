@@ -28,7 +28,7 @@ def main(config, weights):
     cfg.DATA_CONFIG.DATALOADER.SHUFFLE = False
     
     data = unet_dataset.SemanticKittiModule(cfg)
-    data.setup()
+    # data.setup()
 
     model = models.UNet(cfg)
     
@@ -54,7 +54,7 @@ def main(config, weights):
                       callbacks=[lr_monitor, checkpoint])
 
 
-    trainer.fit(model,data.train_dataloader())
+    trainer.fit(model,data)
 
 if __name__ == "__main__":
     main()

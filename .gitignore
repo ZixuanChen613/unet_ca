@@ -1,0 +1,4 @@
+experiments/
+*.nbc
+*.nbi
+*.pyc

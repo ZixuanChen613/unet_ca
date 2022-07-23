@@ -21,13 +21,13 @@ def save_features(x, raw_feat, sem_pred, ins_pred, save_preds):
             sem = sem_pred[i]
             ins =  ins_pred[i]
             valid = ins != 0
-            seq_path = '/_data/data_0719/validation_predictions/sequences/'+seq+'/'
+            seq_path = '/_data/data_0721/validation_predictions/sequences/'+seq+'/'
             max_pt = 30
         else:
             valid = x['pt_valid'][i]
             sem = x['pt_labs'][i]
             ins =  x['pt_ins_labels'][i]
-            seq_path = '/_data/data_0719/instance_features/sequences/'+seq+'/'
+            seq_path = '/_data/data_0721/instance_features/sequences/'+seq+'/'
             max_pt = 10
         ids, n_ids = np.unique(ins[valid],return_counts=True)
         # new_feat = feat[valid]

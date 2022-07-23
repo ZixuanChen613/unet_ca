@@ -21,17 +21,17 @@ DATA_CONFIG:
         MIN_VOLUME_SPACE: [3, '-PI', -3]
         CENTER_TYPE: Axis_center
         DATA_DIM: 9
-        NUM_WORKER: 0 #2
+        NUM_WORKER: 0
 
 TRAIN:
-    LR: 0.002 # MODIFY
+    LR: 0.01 # MODIFY
     N_GPUS: 1
     MAX_EPOCH: 50
     RANDOM_POS_SCANS: True
 
 
 EVAL:
-    BATCH_SIZE: 2
+    BATCH_SIZE: 1
     N_GPUS: 1
 
 ##Network
