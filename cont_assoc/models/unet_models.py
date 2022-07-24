@@ -87,7 +87,16 @@ class UNet(LightningModule):
         for i in range(len(ids)): #iterate over all instances
             if ins_num > 8000:
                 break
-            if sorted_n_ids[i] > 50*pos_scans and sorted_n_ids[i] < 800: #filter too small instances 30
+            if sorted_n_ids[0] < 30*pos_scans:
+                pt_idx = torch.where(pos_labels==ids[i])[0]
+                feat = norm_features[pt_idx]
+                s_labels = sem_labels[pt_idx]
+                p_labels = pos_labels[pt_idx]
+                _pos_labels.append(p_labels)
+                _feats.append(feat)
+                _sem_labels.append(s_labels)
+                break
+            if sorted_n_ids[i] >= 30*pos_scans and sorted_n_ids[i] < 800: #filter too small instances 30
                 ins_num += sorted_n_ids[i]
                 pt_idx = torch.where(pos_labels==ids[i])[0]
                 feat = norm_features[pt_idx]
@@ -106,7 +115,7 @@ class UNet(LightningModule):
                 _pos_labels.append(p_labels)
                 _feats.append(feat)
                 _sem_labels.append(s_labels)
-        
+
         features = torch.cat([i for i in _feats])
         pos_labels = torch.cat([i for i in _pos_labels])
         sem_labels = torch.cat([i for i in _sem_labels])
@@ -134,7 +143,11 @@ class UNet(LightningModule):
         norm_features = norm_features[valid]
         # idx = torch.nonzero(pos_labels)
         feats, pos_l, sem_l = self.group_instances(norm_features, pos_labels, sem_labels, pos_scans)
-        ins_loss = self.ins_loss(feats, pos_l, sem_l)         # torch.Size([13242, 128])
+        if feats == []:
+            ins_loss = torch.tensor(0).to('cuda')
+            print('no instance')
+        else:
+            ins_loss = self.ins_loss(feats, pos_l, sem_l)         # torch.Size([13242, 128])
         loss['unet_loss'] = ins_loss
         return loss
 
@@ -162,8 +175,17 @@ class UNet(LightningModule):
         sem_logits, pred_offsets, pt_ins_feat, raw_features = self(x)
         sem_pred, ins_pred = self.merge_predictions(x, sem_logits, pred_offsets, pt_ins_feat)
         self.evaluator.update(sem_pred, ins_pred, x)
+        torch.cuda.empty_cache()
 
 
+    def validation_epoch_end(self, outputs):
+        # self.evaluator4D.calculate_metrics()
+        # AQ = self.evaluator4D.get_mean_aq()
+        # self.log('AQ',AQ)
+
+        # self.AssocModule.clear()
+        # self.evaluator4D.clear()
+        return
 
 
     def test_step(self, batch, batch_idx):
