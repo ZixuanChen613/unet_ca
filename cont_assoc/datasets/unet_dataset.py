@@ -134,7 +134,7 @@ class SemanticKitti(Dataset):
             SemKITTI_label_name[semkittiyaml['learning_map'][i]] = semkittiyaml['labels'][i]
         self.learning_map = semkittiyaml['learning_map']
         self.split = split
-        split = semkittiyaml['split'][self.split]
+        split = semkittiyaml['split'][self.split]  # 'train' self.split
 
         self.im_idx = []
         self.unet_idx = []
@@ -149,7 +149,7 @@ class SemanticKitti(Dataset):
             calib_files.append(absoluteDirPath(data_path+str(i_folder).zfill(2)+'/calib.txt'))
 
             # empty_files.append(absoluteDirPath(unet_path+str(i_folder).zfill(2)+'/empty.txt'))
-            self.unet_idx += absoluteFilePaths('/'.join([unet_path,str(i_folder).zfill(2),'scans']))
+            self.unet_idx += absoluteFilePaths('/'.join([self.unet_path,str(i_folder).zfill(2),'scans']))
 
            
         self.unet_idx.sort()
@@ -247,10 +247,11 @@ class SemanticKitti(Dataset):
                     if len(seq_first_pose) == 0:
                         seq_first_pose = pose
                     
-                    _raw_data = np.fromfile(self.im_idx[scans[i]], dtype=np.float32).reshape((-1, 4))
+                    bin_path = absoluteDirPath(self.data_path+seq+'/velodyne/'+str(scans[i]).zfill(6)+'.bin')
+                    _raw_data = np.fromfile(bin_path, dtype=np.float32).reshape((-1, 4))
                     _ref = _raw_data[:,3]
                     _coors = _raw_data[:,:3]
-                    annotated_data = np.fromfile(self.im_idx[scans[i]].replace('velodyne','labels')[:-3]+'label', dtype=np.int32).reshape((-1,1))
+                    annotated_data = np.fromfile(bin_path.replace('velodyne','labels')[:-3]+'label', dtype=np.int32).reshape((-1,1))
                     _sem_labels = annotated_data & 0xFFFF #delete high 16 digits binary
                     _ins_labels = annotated_data
                     _valid = np.isin(_sem_labels, self.things_ids).reshape(-1) # use 0 to filter out valid indexes is enough
