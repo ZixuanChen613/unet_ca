@@ -1,3 +1,5 @@
+# import pdb
+# pdb.set_trace()
 import math
 import MinkowskiEngine as ME
 import numpy as np
@@ -169,8 +171,8 @@ class AssociationModule():
         return ins_pred
 
     def sparse_tensor(self, pt_coors, pt_features, pos_encoder):
-        pos_encoding = pos_encoder(pt_coors)
-        pt_features = pt_features + pos_encoding
+        pos_encoding = pos_encoder(pt_coors)            # torch.Size([434, 3])
+        pt_features = pt_features + pos_encoding            # torch.Size([434, 128]), torch.Size([434, 9])
         c_, f_ = ME.utils.sparse_collate([pt_coors], [pt_features], dtype=torch.float32)
         sparse = ME.SparseTensor(features=f_.float(), coordinates=c_.int(),device='cuda')
         return sparse

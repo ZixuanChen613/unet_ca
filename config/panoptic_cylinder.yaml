@@ -5,7 +5,7 @@ EXPERIMENT:
 ##Datasets
 DATA_CONFIG:
     DATASET_NAME: SemanticKitti
-    DATASET_PATH: /_data/zixuan/data/kitti
+    DATASET_PATH: /data/kitti
     CONFIG_FILE: ../cont_assoc/datasets/semantic-kitti.yaml
     NCLASS: 20
     DATALOADER:
@@ -19,7 +19,7 @@ DATA_CONFIG:
         MIN_VOLUME_SPACE: [3, '-PI', -3]
         CENTER_TYPE: Axis_center
         DATA_DIM: 9
-        NUM_WORKER: 0 #2
+        NUM_WORKER: 4
 TRAIN:
     LR: 0.002 # MODIFY
     N_GPUS: 1

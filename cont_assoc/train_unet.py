@@ -42,9 +42,9 @@ def main(config, weights):
                                              default_hp_metric=False)
 
     lr_monitor = LearningRateMonitor(logging_interval='step')
-    checkpoint = ModelCheckpoint(monitor='AQ',
-                                 filename=cfg.EXPERIMENT.ID+'_{epoch:03d}_{AQ:.3f}',
-                                 mode='max',
+    checkpoint = ModelCheckpoint(monitor='training_loss',
+                                 filename=cfg.EXPERIMENT.ID+'_{epoch:03d}_{training_loss:.3f}',
+                                 mode='min',
                                  save_last=True)
 
     trainer = Trainer(gpus=1, #cfg.TRAIN.N_GPUS,

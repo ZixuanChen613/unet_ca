@@ -3,3 +3,4 @@ experiments/
 *.nbi
 *.pyc
 *.log
+output/

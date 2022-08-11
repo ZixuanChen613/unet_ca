@@ -29,6 +29,7 @@ class SupConLoss(nn.Module):
             A loss scalar.
         """
         n_inst = features.shape[0]
+        print(n_inst)
         pos_mask = torch.eq(pos_labels, pos_labels.T).type(torch.int8) # modify
         sem_mask = torch.eq(sem_labels, sem_labels.T).type(torch.int8)
 

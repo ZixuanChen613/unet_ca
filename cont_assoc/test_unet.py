@@ -1,6 +1,6 @@
 import click
-import cont_assoc.datasets.kitti_dataset as kitti_dataset
-import cont_assoc.models.panoptic_models as models
+import cont_assoc.datasets.unet_dataset as unet_dataset
+import cont_assoc.models.unet_models as models
 from easydict import EasyDict as edict
 import os
 from os.path import join
@@ -15,7 +15,8 @@ def getDir(obj):
 @click.option('--ckpt', type=str, required=True)
 @click.option('--save_val_pred', is_flag=True)
 @click.option('--config', '-c', type=str,
-              default=join(getDir(__file__), '../config/panoptic_cylinder.yaml'))
+              default=join(getDir(__file__), '../config/u_net.yaml'))
+
 def main(config, ckpt, save_val_pred):
     cfg = edict(yaml.safe_load(open(config)))
 
@@ -29,10 +30,10 @@ def main(config, ckpt, save_val_pred):
     ckpt_path = join(getDir(__file__), ckpt)
     checkpoint = torch.load(ckpt_path, map_location='cpu')
 
-    model = models.PanopticCylinder(cfg)
+    model = models.UNet(cfg)
     model.load_state_dict(checkpoint['state_dict'])
 
-    data = kitti_dataset.SemanticKittiModule(cfg)
+    data = unet_dataset.SemanticKittiModule(cfg)
     data.setup()
 
     trainer = Trainer(gpus=cfg.EVAL.N_GPUS, logger=False)
@@ -40,7 +41,7 @@ def main(config, ckpt, save_val_pred):
     if save_val_pred:
         trainer.test(model,data.val_dataloader())
     else:
-        trainer.test(model,data.test_dataloader())      # modified
+        trainer.test(model,data.train_dataloader())
 
 if __name__ == "__main__":
     main()

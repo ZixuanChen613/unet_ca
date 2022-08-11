@@ -21,13 +21,13 @@ def save_features(x, raw_feat, sem_pred, ins_pred, save_preds):
             sem = sem_pred[i]
             ins =  ins_pred[i]
             valid = ins != 0
-            seq_path = '/data/data_0809/validation_predictions/sequences/'+seq+'/'
+            seq_path = '/data/unet/data_0807/validation_predictions/sequences/'+seq+'/'
             max_pt = 30
         else:
             valid = x['pt_valid'][i]
             sem = x['pt_labs'][i]
             ins =  x['pt_ins_labels'][i]
-            seq_path = '/data/data_0809/instance_features/sequences/'+seq+'/'
+            seq_path = '/data/unet/data_0807/instance_features/sequences/'+seq+'/'
             max_pt = 10
         ids, n_ids = np.unique(ins[valid],return_counts=True)
         # new_feat = feat[valid]
@@ -63,8 +63,8 @@ def save_features(x, raw_feat, sem_pred, ins_pred, save_preds):
                 f.close()
                 continue
         if save_preds:
-            np_instances = np.array([seq,fname,_ids,_sem_labels,_n_pts,_coors,_feats,new_feat,sem_pred[i],ins_pred[i],x['pcd_fname'][i],x['pt_labs'][i],x['pt_ins_labels'][i]],dtype=object)
+            np_instances = np.array([seq,fname,_ids,_sem_labels,_n_pts,_coors,_feats,sem_pred[i],ins_pred[i],x['pcd_fname'][i],x['pt_labs'][i],x['pt_ins_labels'][i]],dtype=object)
         else:
-            np_instances = np.array([seq,fname,_ids,_sem_labels,_n_pts,_coors,_feats,new_feat],dtype=object)
+            np_instances = np.array([seq,fname,_ids,_sem_labels,_n_pts,_coors,_feats],dtype=object)
 
         np.save(filename,np_instances,allow_pickle=True)

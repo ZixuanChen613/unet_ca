@@ -45,7 +45,7 @@ class VoxelFeatureExtractor(nn.Module):
     def __init__(self, cfg):
         super().__init__()
 
-        in_dim = cfg.DATA_CONFIG.DATALOADER.DATA_DIM #9
+        in_dim = cfg.DATA_CONFIG.DATALOADER.PN_DATA_DIM #9
         out_dim = cfg.MODEL.VOXEL_FEATURES.OUT_DIM #64
         sem_feat_dim = 128
         point_feature_dim = cfg.MODEL.VOXEL_FEATURES.FEATURE_DIM #16
@@ -85,11 +85,14 @@ class VoxelFeatureExtractor(nn.Module):
         point_features = x['pt_fea']            # [N, 9]
         voxel_index = x['grid']
         semantic_feats = x['feats']             # point embedings from backbone
-
+        # s_labels = x['pt_labs']
+        # i_labels = x['pt_ins_labels']
         #create tensors
         pt_fea = [torch.from_numpy(i).type(torch.FloatTensor).cuda() for i in point_features]
         vox_ind = [torch.from_numpy(i).cuda() for i in voxel_index]
         sem_feats = [torch.from_numpy(i).cuda() for i in semantic_feats]
+        # sem_labels = [torch.from_numpy(i).cuda() for i in s_labels]
+        # ins_labels = [torch.from_numpy(i).cuda() for i in i_labels]
 
         #concatenate everything
         cat_pt_ind = []
@@ -99,6 +102,8 @@ class VoxelFeatureExtractor(nn.Module):
         cat_pt_fea = torch.cat(pt_fea, dim=0)
         cat_pt_ind = torch.cat(cat_pt_ind, dim=0)
         cat_sem_fea = torch.cat(sem_feats, dim=0)           # 8782
+        # cat_sem_label = torch.cat(sem_labels, dim=0)
+        # cat_ins_label = torch.cat(ins_labels, dim=0)
         pt_num = cat_pt_ind.shape[0]
 
         # shuffle the data
@@ -106,6 +111,8 @@ class VoxelFeatureExtractor(nn.Module):
         cat_pt_fea = cat_pt_fea[shuffled_ind, :]
         cat_pt_ind = cat_pt_ind[shuffled_ind, :]
         cat_sem_fea = cat_sem_fea[shuffled_ind, :]
+        # cat_sem_label = cat_sem_label[shuffled_ind, :]
+        # cat_ins_label = cat_ins_label[shuffled_ind, :]
 
         # unique xy voxel index
         unq, unq_inv, unq_cnt = torch.unique(cat_pt_ind, return_inverse=True, return_counts=True, dim=0)
@@ -118,6 +125,10 @@ class VoxelFeatureExtractor(nn.Module):
         cat_pt_fea = cat_pt_fea[remain_ind,:]
         cat_pt_ind = cat_pt_ind[remain_ind,:]
         cat_sem_fea = cat_sem_fea[remain_ind,:]
+        # cat_sem_label = cat_sem_label[remain_ind, :]
+        # cat_ins_label = cat_ins_label[remain_ind, :]
+
+
         unq_inv = unq_inv[remain_ind]
         unq_cnt = torch.clamp(unq_cnt,max=self.max_pt)
 
